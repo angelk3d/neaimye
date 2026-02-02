@@ -1,8 +1,10 @@
+import os
 import logging
 import random
 import sqlite3
 import asyncio
 from datetime import datetime
+from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, ChatMemberUpdatedFilter, IS_NOT_MEMBER, IS_MEMBER
 from aiogram.fsm.context import FSMContext
@@ -10,22 +12,25 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, ChatMemberUpdated
 
-# Твои данные
-API_TOKEN = '8506993378:AAEFg37n8nV1rhQGJXXPAQUeKrbUe6t5QJ8'
+load_dotenv()
+
+API_TOKEN = os.getenv('BOT_TOKEN')
+if not API_TOKEN:
+    API_TOKEN = 'YOUR_BOT_TOKEN_HERE'
+    logging.warning("Using hardcoded token! This is unsafe!")
+
 CREATOR_USERNAME = 'whitestrings'
 CREATOR_ID = '8019499675'
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Включаем логирование
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# База данных
 def init_db():
     conn = sqlite3.connect('bot_users.db')
     cursor = conn.cursor()
@@ -47,7 +52,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS groups (
             group_id INTEGER PRIMARY KEY,
             language TEXT DEFAULT NULL,
-            welcome_message INTEGER DEFAULT 1
+            has_admin BOOLEAN DEFAULT 0
         )
     ''')
     
@@ -123,12 +128,24 @@ def set_group_language(group_id, language):
     conn.commit()
     conn.close()
 
-# Состояния
+def update_group_admin_status(group_id, has_admin):
+    conn = sqlite3.connect('bot_users.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM groups WHERE group_id = ?', (group_id,))
+    group = cursor.fetchone()
+    
+    if group:
+        cursor.execute('UPDATE groups SET has_admin = ? WHERE group_id = ?', (has_admin, group_id))
+    else:
+        cursor.execute('INSERT INTO groups (group_id, has_admin) VALUES (?, ?)', (group_id, has_admin))
+    
+    conn.commit()
+    conn.close()
+
 class UserStates(StatesGroup):
     choosing_language = State()
     main_menu = State()
 
-# Функции для бота
 def get_funny_response(lang='ru'):
     if lang == 'ru':
         responses = [
@@ -158,67 +175,63 @@ def get_funny_response(lang='ru'):
         ]
     return random.choice(responses) + " :3"
 
-# Инициализация БД
 init_db()
 logger.info("База данных инициализирована")
 
-# Приветственное сообщение при добавлении бота в группу
+async def check_bot_permissions(group_id):
+    try:
+        bot_member = await bot.get_chat_member(group_id, bot.id)
+        can_send = bot_member.can_send_messages if hasattr(bot_member, 'can_send_messages') else False
+        is_admin = bot_member.status in ['administrator', 'creator']
+        
+        update_group_admin_status(group_id, is_admin and can_send)
+        
+        return {
+            'can_send_messages': can_send,
+            'is_admin': is_admin,
+            'status': bot_member.status
+        }
+    except Exception as e:
+        logger.error(f"Ошибка проверки прав в группе {group_id}: {e}")
+        update_group_admin_status(group_id, False)
+        return None
+
 @dp.chat_member(ChatMemberUpdatedFilter(IS_NOT_MEMBER >> IS_MEMBER))
 async def on_bot_added_to_group(event: ChatMemberUpdated):
-    logger.info(f"Бот добавлен в группу: {event.chat.id} - {event.chat.title}")
-    
     if event.new_chat_member.user.id == bot.id:
         group_id = event.chat.id
         group_title = event.chat.title
         
-        # Ждем 1 секунду перед проверкой прав
-        await asyncio.sleep(1)
+        logger.info(f"Бот добавлен в группу: {group_id} - {group_title}")
         
-        try:
-            # Проверяем права бота
-            bot_member = await bot.get_chat_member(group_id, bot.id)
-            logger.info(f"Права бота в группе {group_id}: can_send_messages={bot_member.can_send_messages}")
-            
-            if not bot_member.can_send_messages:
-                # У бота нет прав на отправку сообщений
-                try:
-                    await bot.send_message(
-                        group_id,
-                        "😫 БЛИННН! Я не могу писать в эту группу, потому что у меня нет прав администратора!\n\n"
-                        "Пожалуйста, дайте мне права на отправку сообщений, а затем напишите 'нейми теперь администратор' :3"
-                    )
-                    logger.info(f"Сообщение о правах отправлено в группу {group_id}")
-                except Exception as e:
-                    logger.error(f"Не могу отправить сообщение в группу {group_id}: {e}")
-            else:
-                # Бот может писать, сразу предлагаем выбрать язык
-                keyboard = InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [
-                            InlineKeyboardButton(text="🇷🇺 Русский", callback_data=f"group_lang_ru_{group_id}"),
-                            InlineKeyboardButton(text="🇬🇧 English", callback_data=f"group_lang_en_{group_id}")
-                        ]
+        permissions = await check_bot_permissions(group_id)
+        
+        if permissions and permissions['can_send_messages']:
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(text="🇷🇺 Русский", callback_data=f"group_lang_ru_{group_id}"),
+                        InlineKeyboardButton(text="🇬🇧 English", callback_data=f"group_lang_en_{group_id}")
                     ]
-                )
-                
-                await bot.send_message(
-                    group_id,
-                    f"👋 Приветствую в группе '{group_title}'!\n\n"
-                    f"Выберите язык для общения со мной:\n\n"
-                    f"👋 Welcome to group '{group_title}'!\n"
-                    f"Choose language for communication with me:",
-                    reply_markup=keyboard
-                )
-                logger.info(f"Приветствие с выбором языка отправлено в группу {group_id}")
-                
-        except Exception as e:
-            logger.error(f"Ошибка при добавлении бота в группу {group_id}: {e}")
+                ]
+            )
+            
+            await bot.send_message(
+                group_id,
+                f"👋 Приветствую в группе '{group_title}'!\n\n"
+                f"Выберите язык для общения со мной:\n\n"
+                f"👋 Welcome to group '{group_title}'!\n"
+                f"Choose language for communication with me:",
+                reply_markup=keyboard
+            )
+            logger.info(f"Приветствие отправлено в группу {group_id}")
+        else:
+            logger.warning(f"Бот добавлен в группу {group_id} без прав администратора")
 
-# Выбор языка для группы
 @dp.callback_query(F.data.startswith("group_lang_"))
 async def set_group_language_handler(callback: types.CallbackQuery):
     data = callback.data.split("_")
-    lang = data[2]  # ru или en
+    lang = data[2]
     group_id = int(data[3])
     
     set_group_language(group_id, lang)
@@ -236,7 +249,6 @@ async def set_group_language_handler(callback: types.CallbackQuery):
     
     await callback.answer()
 
-# Обработчик старта в ЛС
 @dp.message(Command("start", "help"))
 async def cmd_start(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
@@ -247,7 +259,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
     logger.info(f"Команда /start от пользователя {user_id} ({first_name}) в чате {message.chat.type}")
     
     if message.chat.type == "private":
-        # Проверяем, верифицирован ли пользователь
         if is_user_verified(user_id):
             user = get_user(user_id)
             lang = user[5] if user else 'ru'
@@ -285,7 +296,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
                 )
                 await state.set_state(UserStates.main_menu)
         else:
-            # Приветственное сообщение с выбором языка
             keyboard = InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
@@ -303,13 +313,11 @@ async def cmd_start(message: types.Message, state: FSMContext):
                 reply_markup=keyboard
             )
     else:
-        # В группе показываем справку
         await message.answer("Для справки напиши 'нейми помощь' :3")
 
-# Выбор языка при старте
 @dp.callback_query(F.data.startswith("start_lang_"))
 async def start_language_handler(callback: types.CallbackQuery, state: FSMContext):
-    lang = callback.data.split("_")[2]  # ru или en
+    lang = callback.data.split("_")[2]
     
     user_id = callback.from_user.id
     username = callback.from_user.username
@@ -318,7 +326,6 @@ async def start_language_handler(callback: types.CallbackQuery, state: FSMContex
     
     logger.info(f"Пользователь {user_id} выбрал язык: {lang}")
     
-    # Сохраняем пользователя
     update_user(user_id, username, first_name, last_name, lang)
     
     if lang == 'ru':
@@ -375,19 +382,16 @@ async def start_language_handler(callback: types.CallbackQuery, state: FSMContex
     await state.set_state(UserStates.main_menu)
     await callback.answer()
 
-# Обработка ЛС - главное меню
 @dp.message(F.chat.type == "private")
 async def handle_private_messages(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     
     logger.info(f"Личное сообщение от {user_id}: {message.text}")
     
-    # Если это команда /start или /help
     if message.text in ["/start", "/help", "/start@neaimybot", "/help@neaimybot"]:
         await cmd_start(message, state)
         return
     
-    # Проверяем верификацию
     if not is_user_verified(user_id):
         await message.answer("Сначала пройди верификацию! Напиши /start :3")
         return
@@ -395,7 +399,6 @@ async def handle_private_messages(message: types.Message, state: FSMContext):
     user = get_user(user_id)
     lang = user[5] if user else 'ru'
     
-    # Обработка текстовых команд
     if lang == 'ru':
         if message.text == "👤 Мой профиль":
             user_info = f"""
@@ -536,10 +539,9 @@ All commands end with :3
             )
             await message.answer("Use buttons below! :3", reply_markup=keyboard)
 
-# Смена языка в ЛС
 @dp.callback_query(F.data.startswith("change_lang_"))
 async def change_language_handler(callback: types.CallbackQuery, state: FSMContext):
-    lang = callback.data.split("_")[2]  # ru или en
+    lang = callback.data.split("_")[2]
     
     user_id = callback.from_user.id
     set_user_language(user_id, lang)
@@ -583,130 +585,62 @@ async def change_language_handler(callback: types.CallbackQuery, state: FSMConte
     await state.set_state(UserStates.main_menu)
     await callback.answer()
 
-# Обработка сообщений в группах
-@dp.message(F.chat.type.in_(["group", "supergroup"]))
-async def handle_group_messages(message: types.Message):
-    text = message.text or ""
+async def process_group_command(message: types.Message):
+    text = (message.text or "").lower()
     user_id = message.from_user.id
     first_name = message.from_user.first_name
     chat_id = message.chat.id
     
-    logger.info(f"Групповое сообщение от {user_id} в чате {chat_id}: {text}")
+    if not (text.startswith("нейми") or text.startswith("neymi")):
+        return False
     
-    # Проверяем, начинается ли с "нейми"
-    if text.lower().startswith("нейми"):
-        command = text[6:].strip().lower()
-    elif text.lower().startswith("neymi"):
-        command = text[6:].strip().lower()
-    else:
-        return  # Игнорируем сообщения без "нейми"
+    command = text[6:].strip().lower() if text.startswith("нейми") else text[6:].strip().lower()
     
-    # Если нет команды после "нейми" - отвечаем "Я тута :3"
     if not command:
-        try:
-            # Проверяем права бота
-            bot_member = await bot.get_chat_member(chat_id, bot.id)
-            if bot_member.can_send_messages:
-                await message.answer("Я тута :3")
-                logger.info(f"Ответ 'Я тута' отправлен в чат {chat_id}")
-            else:
-                logger.warning(f"Бот не может отправлять сообщения в чат {chat_id}")
-        except Exception as e:
-            logger.error(f"Ошибка при проверке прав в чате {chat_id}: {e}")
-        return
+        return False
     
-    # Проверяем права бота
-    try:
-        bot_member = await bot.get_chat_member(chat_id, bot.id)
-        can_send = bot_member.can_send_messages
-        logger.info(f"Права бота в чате {chat_id}: can_send={can_send}")
-    except Exception as e:
-        logger.error(f"Ошибка получения прав бота в чате {chat_id}: {e}")
-        can_send = False
+    permissions = await check_bot_permissions(chat_id)
     
-    # Команда "теперь администратор"
-    if "теперь администратор" in command or "now admin" in command:
-        logger.info(f"Команда 'теперь администратор' в чате {chat_id}")
-        if can_send:
-            # Проверяем язык группы
-            group_lang = get_group_language(chat_id)
-            if group_lang is None:
-                # Предлагаем выбрать язык
-                keyboard = InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [
-                            InlineKeyboardButton(text="🇷🇺 Русский", callback_data=f"group_lang_ru_{chat_id}"),
-                            InlineKeyboardButton(text="🇬🇧 English", callback_data=f"group_lang_en_{chat_id}")
-                        ]
-                    ]
-                )
-                await message.answer(
-                    "✅ Теперь у меня есть права администратора! Выберите язык для общения:\n\n"
-                    "✅ Now I have administrator rights! Choose language for communication:",
-                    reply_markup=keyboard
-                )
-                logger.info(f"Предложен выбор языка в чате {chat_id}")
-            else:
-                lang_text = "на русском" if group_lang == 'ru' else "in English"
-                await message.answer(
-                    f"✅ У меня уже есть права администратора! Я уже общаюсь {lang_text} :3"
-                )
-        else:
-            # Бот все еще не может писать
-            try:
-                await message.answer(
-                    "😫 Все еще не могу писать! Проверьте, дали ли мне права администратора :3"
-                )
-            except:
-                pass
-        return
+    if not permissions or not permissions['can_send_messages']:
+        logger.warning(f"Бот не может писать в чат {chat_id}")
+        return False
     
-    # Проверяем, может ли бот писать
-    if not can_send:
-        try:
-            await message.answer(
-                "😫 Я не могу писать! Дайте мне права администратора, затем напишите 'нейми теперь администратор' :3"
-            )
-            logger.warning(f"Бот не может писать в чат {chat_id}")
-        except Exception as e:
-            logger.error(f"Бот не может отправить сообщение об отсутствии прав в чат {chat_id}: {e}")
-        return
-    
-    # Получаем язык группы
     group_lang = get_group_language(chat_id)
     if group_lang is None:
-        # Язык группы не установлен
-        await message.answer(
-            "🌍 Сначала выберите язык для бота! Напишите 'нейми теперь администратор' :3"
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="🇷🇺 Русский", callback_data=f"group_lang_ru_{chat_id}"),
+                    InlineKeyboardButton(text="🇬🇧 English", callback_data=f"group_lang_en_{chat_id}")
+                ]
+            ]
         )
-        return
+        await message.answer(
+            "🌍 Пожалуйста, выберите язык для бота в этой группе:\n\n"
+            "🌍 Please choose language for bot in this group:",
+            reply_markup=keyboard
+        )
+        return True
     
-    # Проверяем верификацию пользователя
     if not is_user_verified(user_id):
         await message.answer(
             f"👤 {first_name}, для использования бота сначала пройди верификацию в личных сообщениях! Напиши /start :3"
         )
-        return
+        return True
     
-    # Получаем язык пользователя
     user = get_user(user_id)
     user_lang = user[5] if user else group_lang
     response_lang = group_lang if group_lang else user_lang
     
-    logger.info(f"Обработка команды '{command}' в чате {chat_id}, язык: {response_lang}")
-    
-    # Приветствие
     if any(word in command for word in ["привет", "hello", "hi", "хай"]):
         if response_lang == 'ru':
             await message.answer(f"Привет, {first_name}! Как дела? :3")
         else:
             await message.answer(f"Hello, {first_name}! How are you? :3")
     
-    # Бред
     elif "бред" in command or "nonsense" in command:
         await message.answer(get_funny_response(response_lang))
     
-    # Кому дать тортик
     elif "кому дать тортик" in command or "give cake" in command:
         if message.reply_to_message:
             user = message.reply_to_message.from_user
@@ -727,7 +661,6 @@ async def handle_group_messages(message: types.Message):
             else:
                 await message.answer("Reply to the person's message who you want to give cake to! :3")
     
-    # Приватная команда для создателя
     elif "кто моя жена" in command or "who is my wife" in command:
         if str(message.from_user.id) == CREATOR_ID or message.from_user.username == CREATOR_USERNAME:
             await message.answer(
@@ -740,7 +673,6 @@ async def handle_group_messages(message: types.Message):
             else:
                 await message.answer("This command is only for the creator! :3")
     
-    # Профиль
     elif "профиль" in command or "profile" in command:
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
@@ -768,7 +700,6 @@ async def handle_group_messages(message: types.Message):
                 reply_markup=keyboard
             )
     
-    # Помощь
     elif "помощь" in command or "help" in command:
         if response_lang == 'ru':
             help_text = f"""
@@ -801,7 +732,6 @@ Write "нейми" and command! :3
         
         await message.answer(help_text, parse_mode="Markdown")
     
-    # Как дела
     elif "как дела" in command or "how are you" in command:
         if response_lang == 'ru':
             responses = [
@@ -817,7 +747,6 @@ Write "нейми" and command! :3
             ]
         await message.answer(random.choice(responses))
     
-    # Факт
     elif "факт" in command or "fact" in command:
         if response_lang == 'ru':
             facts = [
@@ -835,14 +764,21 @@ Write "нейми" and command! :3
             ]
         await message.answer(random.choice(facts))
     
-    # Неизвестная команда
     else:
         if response_lang == 'ru':
             await message.answer(f"Я не понял команды, {first_name}! Попробуй 'нейми помощь' :3")
         else:
             await message.answer(f"I didn't understand the command, {first_name}! Try 'нейми help' :3")
+    
+    return True
 
-# Обработка кнопок профиля в группе
+@dp.message(F.chat.type.in_(["group", "supergroup"]))
+async def handle_group_messages(message: types.Message):
+    text = (message.text or "").lower()
+    
+    if text.startswith("нейми") or text.startswith("neymi"):
+        await process_group_command(message)
+
 @dp.callback_query(F.data.startswith("personal_profile_"))
 async def show_personal_profile(callback: types.CallbackQuery):
     user_id = int(callback.data.split("_")[2])
@@ -939,7 +875,6 @@ You're doing great in the group! :3
         logger.error(f"Error getting group member: {e}")
         await callback.answer("❌ Ошибка получения информации :3" if lang == 'ru' else "❌ Error getting information :3", show_alert=True)
 
-# Запуск бота
 async def main():
     logger.info("Запуск бота...")
     try:
