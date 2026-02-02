@@ -63,7 +63,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS groups (
             group_id INTEGER PRIMARY KEY,
             language TEXT DEFAULT NULL,
-            has_sent_welcome BOOLEAN DEFAULT 0
+            welcome_sent BOOLEAN DEFAULT 0,
+            is_active BOOLEAN DEFAULT 1
         )
     ''')
     
@@ -139,24 +140,50 @@ def set_group_language(group_id, language):
     conn.commit()
     conn.close()
 
-def set_group_welcome_sent(group_id, sent=True):
+def mark_group_as_processed(group_id):
+    """Помечаем группу как обработанную (приветствие отправлено)"""
     conn = sqlite3.connect('bot_users.db')
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM groups WHERE group_id = ?', (group_id,))
     group = cursor.fetchone()
     
     if group:
-        cursor.execute('UPDATE groups SET has_sent_welcome = ? WHERE group_id = ?', (1 if sent else 0, group_id))
+        cursor.execute('UPDATE groups SET welcome_sent = 1 WHERE group_id = ?', (group_id,))
     else:
-        cursor.execute('INSERT INTO groups (group_id, has_sent_welcome) VALUES (?, ?)', (group_id, 1 if sent else 0))
+        cursor.execute('INSERT INTO groups (group_id, welcome_sent) VALUES (?, 1)', (group_id,))
     
     conn.commit()
     conn.close()
 
-def has_group_received_welcome(group_id):
+def is_group_processed(group_id):
+    """Проверяем, было ли отправлено приветствие в группе"""
     conn = sqlite3.connect('bot_users.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT has_sent_welcome FROM groups WHERE group_id = ?', (group_id,))
+    cursor.execute('SELECT welcome_sent FROM groups WHERE group_id = ?', (group_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result and result[0] == 1
+
+def set_group_active(group_id, active):
+    """Устанавливаем статус активности группы"""
+    conn = sqlite3.connect('bot_users.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM groups WHERE group_id = ?', (group_id,))
+    group = cursor.fetchone()
+    
+    if group:
+        cursor.execute('UPDATE groups SET is_active = ? WHERE group_id = ?', (1 if active else 0, group_id))
+    else:
+        cursor.execute('INSERT INTO groups (group_id, is_active) VALUES (?, ?)', (group_id, 1 if active else 0))
+    
+    conn.commit()
+    conn.close()
+
+def is_group_active(group_id):
+    """Проверяем активна ли группа"""
+    conn = sqlite3.connect('bot_users.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT is_active FROM groups WHERE group_id = ?', (group_id,))
     result = cursor.fetchone()
     conn.close()
     return result and result[0] == 1
@@ -208,41 +235,79 @@ async def check_bot_permissions(chat_id):
         logger.error(f"Ошибка проверки прав в чате {chat_id}: {e}")
         return False
 
-async def try_send_welcome_to_group(group_id, group_title):
-    """Пытается отправить приветственное сообщение в группу"""
+async def send_welcome_message(group_id, group_title):
+    """Отправляет приветственное сообщение с выбором языка"""
     try:
-        # Проверяем права
-        has_permissions = await check_bot_permissions(group_id)
-        
-        if has_permissions and not has_group_received_welcome(group_id):
-            # Бот имеет права и еще не отправлял приветствие
-            keyboard = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(text="🇷🇺 Русский", callback_data=f"group_lang_ru_{group_id}"),
-                        InlineKeyboardButton(text="🇬🇧 English", callback_data=f"group_lang_en_{group_id}")
-                    ]
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="🇷🇺 Русский", callback_data=f"group_lang_ru_{group_id}"),
+                    InlineKeyboardButton(text="🇬🇧 English", callback_data=f"group_lang_en_{group_id}")
                 ]
-            )
-            
-            await bot.send_message(
-                group_id,
-                f"👋 Приветствую в группе '{group_title}'!\n\n"
-                f"Выберите язык для общения со мной:\n\n"
-                f"👋 Welcome to group '{group_title}'!\n"
-                f"Choose language for communication with me:",
-                reply_markup=keyboard
-            )
-            
-            # Помечаем, что приветствие отправлено
-            set_group_welcome_sent(group_id, True)
-            logger.info(f"Приветствие отправлено в группу {group_id}")
-            return True
-        else:
-            return False
+            ]
+        )
+        
+        await bot.send_message(
+            group_id,
+            f"👋 Приветствую в группе '{group_title}'!\n\n"
+            f"Выберите язык для общения со мной:\n\n"
+            f"👋 Welcome to group '{group_title}'!\n"
+            f"Choose language for communication with me:",
+            reply_markup=keyboard
+        )
+        
+        # Помечаем, что приветствие отправлено
+        mark_group_as_processed(group_id)
+        logger.info(f"✅ Приветствие отправлено в группу {group_id}")
+        return True
     except Exception as e:
-        logger.error(f"Не могу отправить приветствие в группу {group_id}: {e}")
+        logger.warning(f"Не могу отправить приветствие в группу {group_id}: {e}")
         return False
+
+# Словарь для хранения активных задач по группам
+active_tasks = {}
+
+async def keep_trying_to_send_welcome(group_id, group_title):
+    """Бесконечно пытается отправить приветствие каждые 2 секунды"""
+    logger.info(f"🚀 Начинаю попытки отправки приветствия в группу {group_id}")
+    
+    while True:
+        try:
+            # Проверяем активность группы
+            if not is_group_active(group_id):
+                logger.info(f"Группа {group_id} неактивна, прекращаю попытки")
+                break
+                
+            # Проверяем, не было ли уже отправлено приветствие
+            if is_group_processed(group_id):
+                logger.info(f"Приветствие уже отправлено в группу {group_id}, прекращаю попытки")
+                break
+                
+            # Проверяем права
+            has_permissions = await check_bot_permissions(group_id)
+            
+            if has_permissions:
+                logger.info(f"✅ Бот имеет права в группе {group_id}, пытаюсь отправить приветствие")
+                success = await send_welcome_message(group_id, group_title)
+                if success:
+                    logger.info(f"✅ Приветствие успешно отправлено в группу {group_id}")
+                    break
+                else:
+                    logger.warning(f"Не удалось отправить приветствие в группу {group_id}, пробую снова через 2 секунды")
+            else:
+                logger.info(f"⏳ Бот не имеет прав в группе {group_id}, жду 2 секунды")
+            
+            # Ждем 2 секунды перед следующей попыткой
+            await asyncio.sleep(2)
+            
+        except Exception as e:
+            logger.error(f"Ошибка при попытке отправить приветствие в группу {group_id}: {e}")
+            await asyncio.sleep(2)
+    
+    # Удаляем задачу из словаря активных задач
+    if group_id in active_tasks:
+        del active_tasks[group_id]
+    logger.info(f"Завершены попытки отправки приветствия в группу {group_id}")
 
 @dp.chat_member(ChatMemberUpdatedFilter(IS_NOT_MEMBER >> IS_MEMBER))
 async def on_bot_added_to_group(event: ChatMemberUpdated):
@@ -250,11 +315,43 @@ async def on_bot_added_to_group(event: ChatMemberUpdated):
         group_id = event.chat.id
         group_title = event.chat.title
         
-        logger.info(f"Бот добавлен в группу: {group_id} - {group_title}")
+        logger.info(f"🤖 Бот добавлен в группу: {group_id} - {group_title}")
         
-        # Ждем 2 секунды и пытаемся отправить приветствие
-        await asyncio.sleep(2)
-        await try_send_welcome_to_group(group_id, group_title)
+        # Помечаем группу как активную
+        set_group_active(group_id, True)
+        
+        # Если для этой группы уже есть активная задача, отменяем ее
+        if group_id in active_tasks:
+            try:
+                active_tasks[group_id].cancel()
+                logger.info(f"Отменена предыдущая задача для группы {group_id}")
+            except:
+                pass
+        
+        # Запускаем новую задачу для этой группы
+        task = asyncio.create_task(keep_trying_to_send_welcome(group_id, group_title))
+        active_tasks[group_id] = task
+        
+        logger.info(f"Запущена задача для группы {group_id}")
+
+@dp.chat_member(ChatMemberUpdatedFilter(IS_MEMBER >> IS_NOT_MEMBER))
+async def on_bot_removed_from_group(event: ChatMemberUpdated):
+    if event.old_chat_member.user.id == bot.id:
+        group_id = event.chat.id
+        
+        logger.info(f"🗑️ Бот удален из группы: {group_id}")
+        
+        # Помечаем группу как неактивную
+        set_group_active(group_id, False)
+        
+        # Отменяем задачу для этой группы, если она существует
+        if group_id in active_tasks:
+            try:
+                active_tasks[group_id].cancel()
+                logger.info(f"Отменена задача для удаленной группы {group_id}")
+                del active_tasks[group_id]
+            except:
+                pass
 
 @dp.callback_query(F.data.startswith("group_lang_"))
 async def set_group_language_handler(callback: types.CallbackQuery):
@@ -610,8 +707,6 @@ async def handle_group_messages(message: types.Message):
     user_id = message.from_user.id
     chat_id = message.chat.id
     
-    logger.info(f"Групповое сообщение от {user_id} в чате {chat_id}")
-    
     # Проверяем, начинается ли с "нейми"
     if text.startswith("нейми") or text.startswith("neymi"):
         # Проверяем права бота
@@ -736,32 +831,41 @@ Start with "нейми":
             else:
                 await message.answer(f"I didn't understand the command, {message.from_user.first_name}! Try 'нейми help' :3")
 
-async def periodic_permission_check():
-    """Периодическая проверка прав бота во всех группах"""
+async def restart_stuck_groups():
+    """Перезапускает задачи для групп, которые могли застрять"""
     while True:
         try:
-            # Получаем все группы из БД
+            # Получаем все активные группы из БД
             conn = sqlite3.connect('bot_users.db')
             cursor = conn.cursor()
-            cursor.execute('SELECT group_id FROM groups')
+            cursor.execute('SELECT group_id FROM groups WHERE is_active = 1 AND welcome_sent = 0')
             groups = cursor.fetchall()
             conn.close()
             
             for group in groups:
                 group_id = group[0]
-                try:
-                    # Получаем информацию о группе
-                    chat = await bot.get_chat(group_id)
-                    # Пытаемся отправить приветствие, если еще не отправляли
-                    await try_send_welcome_to_group(group_id, chat.title)
-                except Exception as e:
-                    logger.error(f"Ошибка при проверке группы {group_id}: {e}")
+                
+                # Проверяем, есть ли уже задача для этой группы
+                if group_id not in active_tasks:
+                    try:
+                        # Получаем информацию о группе
+                        chat = await bot.get_chat(group_id)
+                        
+                        # Запускаем новую задачу
+                        task = asyncio.create_task(keep_trying_to_send_welcome(group_id, chat.title))
+                        active_tasks[group_id] = task
+                        logger.info(f"Перезапущена задача для группы {group_id}")
+                    except Exception as e:
+                        # Если бота нет в группе, помечаем как неактивную
+                        if "Chat not found" in str(e) or "bot was kicked" in str(e):
+                            logger.info(f"Бота нет в группе {group_id}, помечаем как неактивную")
+                            set_group_active(group_id, False)
             
-            # Ждем 10 секунд перед следующей проверкой
-            await asyncio.sleep(10)
+            # Ждем 30 секунд перед следующей проверкой
+            await asyncio.sleep(30)
         except Exception as e:
-            logger.error(f"Ошибка в периодической проверке: {e}")
-            await asyncio.sleep(10)
+            logger.error(f"Ошибка в перезапуске задач: {e}")
+            await asyncio.sleep(30)
 
 async def main():
     logger.info("Запуск бота на Railway...")
@@ -774,8 +878,8 @@ async def main():
         logger.error(f"Ошибка при запуске бота: {e}")
         return
     
-    # Запускаем периодическую проверку прав в фоне
-    asyncio.create_task(periodic_permission_check())
+    # Запускаем задачу для перезапуска застрявших групп
+    asyncio.create_task(restart_stuck_groups())
     
     # Запускаем поллинг
     await dp.start_polling(bot)
