@@ -18,6 +18,13 @@ CREATOR_ID = '8019499675'
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
+# Включаем логирование
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 # База данных
 def init_db():
     conn = sqlite3.connect('bot_users.db')
@@ -153,20 +160,13 @@ def get_funny_response(lang='ru'):
 
 # Инициализация БД
 init_db()
-
-# Функция проверки прав бота
-async def check_bot_permissions(chat_id):
-    try:
-        bot_member = await bot.get_chat_member(chat_id, bot.id)
-        can_send = bot_member.can_send_messages if hasattr(bot_member, 'can_send_messages') else False
-        return can_send
-    except Exception as e:
-        logging.error(f"Error checking permissions: {e}")
-        return False
+logger.info("База данных инициализирована")
 
 # Приветственное сообщение при добавлении бота в группу
 @dp.chat_member(ChatMemberUpdatedFilter(IS_NOT_MEMBER >> IS_MEMBER))
 async def on_bot_added_to_group(event: ChatMemberUpdated):
+    logger.info(f"Бот добавлен в группу: {event.chat.id} - {event.chat.title}")
+    
     if event.new_chat_member.user.id == bot.id:
         group_id = event.chat.id
         group_title = event.chat.title
@@ -174,9 +174,10 @@ async def on_bot_added_to_group(event: ChatMemberUpdated):
         # Ждем 1 секунду перед проверкой прав
         await asyncio.sleep(1)
         
-        # Проверяем права бота
         try:
+            # Проверяем права бота
             bot_member = await bot.get_chat_member(group_id, bot.id)
+            logger.info(f"Права бота в группе {group_id}: can_send_messages={bot_member.can_send_messages}")
             
             if not bot_member.can_send_messages:
                 # У бота нет прав на отправку сообщений
@@ -186,10 +187,54 @@ async def on_bot_added_to_group(event: ChatMemberUpdated):
                         "😫 БЛИННН! Я не могу писать в эту группу, потому что у меня нет прав администратора!\n\n"
                         "Пожалуйста, дайте мне права на отправку сообщений, а затем напишите 'нейми теперь администратор' :3"
                     )
+                    logger.info(f"Сообщение о правах отправлено в группу {group_id}")
                 except Exception as e:
-                    logging.error(f"Не могу отправить сообщение в группу {group_id}: {e}")
+                    logger.error(f"Не могу отправить сообщение в группу {group_id}: {e}")
+            else:
+                # Бот может писать, сразу предлагаем выбрать язык
+                keyboard = InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(text="🇷🇺 Русский", callback_data=f"group_lang_ru_{group_id}"),
+                            InlineKeyboardButton(text="🇬🇧 English", callback_data=f"group_lang_en_{group_id}")
+                        ]
+                    ]
+                )
+                
+                await bot.send_message(
+                    group_id,
+                    f"👋 Приветствую в группе '{group_title}'!\n\n"
+                    f"Выберите язык для общения со мной:\n\n"
+                    f"👋 Welcome to group '{group_title}'!\n"
+                    f"Choose language for communication with me:",
+                    reply_markup=keyboard
+                )
+                logger.info(f"Приветствие с выбором языка отправлено в группу {group_id}")
+                
         except Exception as e:
-            logging.error(f"Ошибка проверки прав бота: {e}")
+            logger.error(f"Ошибка при добавлении бота в группу {group_id}: {e}")
+
+# Выбор языка для группы
+@dp.callback_query(F.data.startswith("group_lang_"))
+async def set_group_language_handler(callback: types.CallbackQuery):
+    data = callback.data.split("_")
+    lang = data[2]  # ru или en
+    group_id = int(data[3])
+    
+    set_group_language(group_id, lang)
+    logger.info(f"Язык группы {group_id} установлен: {lang}")
+    
+    if lang == 'ru':
+        text = "✅ Отлично! Я буду общаться на русском языке в этой группе! :3"
+    else:
+        text = "✅ Great! I will communicate in English in this group! :3"
+    
+    try:
+        await callback.message.edit_text(text)
+    except:
+        await bot.send_message(group_id, text)
+    
+    await callback.answer()
 
 # Обработчик старта в ЛС
 @dp.message(Command("start", "help"))
@@ -198,6 +243,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
     username = message.from_user.username
     first_name = message.from_user.first_name
     last_name = message.from_user.last_name
+    
+    logger.info(f"Команда /start от пользователя {user_id} ({first_name}) в чате {message.chat.type}")
     
     if message.chat.type == "private":
         # Проверяем, верифицирован ли пользователь
@@ -255,6 +302,9 @@ async def cmd_start(message: types.Message, state: FSMContext):
                 "Please choose language:",
                 reply_markup=keyboard
             )
+    else:
+        # В группе показываем справку
+        await message.answer("Для справки напиши 'нейми помощь' :3")
 
 # Выбор языка при старте
 @dp.callback_query(F.data.startswith("start_lang_"))
@@ -265,6 +315,8 @@ async def start_language_handler(callback: types.CallbackQuery, state: FSMContex
     username = callback.from_user.username
     first_name = callback.from_user.first_name
     last_name = callback.from_user.last_name
+    
+    logger.info(f"Пользователь {user_id} выбрал язык: {lang}")
     
     # Сохраняем пользователя
     update_user(user_id, username, first_name, last_name, lang)
@@ -328,8 +380,10 @@ async def start_language_handler(callback: types.CallbackQuery, state: FSMContex
 async def handle_private_messages(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     
+    logger.info(f"Личное сообщение от {user_id}: {message.text}")
+    
     # Если это команда /start или /help
-    if message.text in ["/start", "/help"]:
+    if message.text in ["/start", "/help", "/start@neaimybot", "/help@neaimybot"]:
         await cmd_start(message, state)
         return
     
@@ -535,6 +589,9 @@ async def handle_group_messages(message: types.Message):
     text = message.text or ""
     user_id = message.from_user.id
     first_name = message.from_user.first_name
+    chat_id = message.chat.id
+    
+    logger.info(f"Групповое сообщение от {user_id} в чате {chat_id}: {text}")
     
     # Проверяем, начинается ли с "нейми"
     if text.lower().startswith("нейми"):
@@ -544,27 +601,42 @@ async def handle_group_messages(message: types.Message):
     else:
         return  # Игнорируем сообщения без "нейми"
     
-    # Проверяем права бота
-    can_send = await check_bot_permissions(message.chat.id)
-    
     # Если нет команды после "нейми" - отвечаем "Я тута :3"
     if not command:
-        if can_send:
-            await message.answer("Я тута :3")
+        try:
+            # Проверяем права бота
+            bot_member = await bot.get_chat_member(chat_id, bot.id)
+            if bot_member.can_send_messages:
+                await message.answer("Я тута :3")
+                logger.info(f"Ответ 'Я тута' отправлен в чат {chat_id}")
+            else:
+                logger.warning(f"Бот не может отправлять сообщения в чат {chat_id}")
+        except Exception as e:
+            logger.error(f"Ошибка при проверке прав в чате {chat_id}: {e}")
         return
+    
+    # Проверяем права бота
+    try:
+        bot_member = await bot.get_chat_member(chat_id, bot.id)
+        can_send = bot_member.can_send_messages
+        logger.info(f"Права бота в чате {chat_id}: can_send={can_send}")
+    except Exception as e:
+        logger.error(f"Ошибка получения прав бота в чате {chat_id}: {e}")
+        can_send = False
     
     # Команда "теперь администратор"
     if "теперь администратор" in command or "now admin" in command:
+        logger.info(f"Команда 'теперь администратор' в чате {chat_id}")
         if can_send:
             # Проверяем язык группы
-            group_lang = get_group_language(message.chat.id)
+            group_lang = get_group_language(chat_id)
             if group_lang is None:
                 # Предлагаем выбрать язык
                 keyboard = InlineKeyboardMarkup(
                     inline_keyboard=[
                         [
-                            InlineKeyboardButton(text="🇷🇺 Русский", callback_data=f"group_lang_ru_{message.chat.id}"),
-                            InlineKeyboardButton(text="🇬🇧 English", callback_data=f"group_lang_en_{message.chat.id}")
+                            InlineKeyboardButton(text="🇷🇺 Русский", callback_data=f"group_lang_ru_{chat_id}"),
+                            InlineKeyboardButton(text="🇬🇧 English", callback_data=f"group_lang_en_{chat_id}")
                         ]
                     ]
                 )
@@ -573,6 +645,7 @@ async def handle_group_messages(message: types.Message):
                     "✅ Now I have administrator rights! Choose language for communication:",
                     reply_markup=keyboard
                 )
+                logger.info(f"Предложен выбор языка в чате {chat_id}")
             else:
                 lang_text = "на русском" if group_lang == 'ru' else "in English"
                 await message.answer(
@@ -592,14 +665,15 @@ async def handle_group_messages(message: types.Message):
     if not can_send:
         try:
             await message.answer(
-                "😫 Я все еще не могу писать! Проверьте, дали ли мне права администратора :3"
+                "😫 Я не могу писать! Дайте мне права администратора, затем напишите 'нейми теперь администратор' :3"
             )
-        except:
-            pass
+            logger.warning(f"Бот не может писать в чат {chat_id}")
+        except Exception as e:
+            logger.error(f"Бот не может отправить сообщение об отсутствии прав в чат {chat_id}: {e}")
         return
     
     # Получаем язык группы
-    group_lang = get_group_language(message.chat.id)
+    group_lang = get_group_language(chat_id)
     if group_lang is None:
         # Язык группы не установлен
         await message.answer(
@@ -618,6 +692,8 @@ async def handle_group_messages(message: types.Message):
     user = get_user(user_id)
     user_lang = user[5] if user else group_lang
     response_lang = group_lang if group_lang else user_lang
+    
+    logger.info(f"Обработка команды '{command}' в чате {chat_id}, язык: {response_lang}")
     
     # Приветствие
     if any(word in command for word in ["привет", "hello", "hi", "хай"]):
@@ -675,7 +751,7 @@ async def handle_group_messages(message: types.Message):
                     ),
                     InlineKeyboardButton(
                         text="👥 Профиль в группе" if response_lang == 'ru' else "👥 Group profile", 
-                        callback_data=f"group_profile_{user_id}_{message.chat.id}"
+                        callback_data=f"group_profile_{user_id}_{chat_id}"
                     )
                 ]
             ]
@@ -765,27 +841,6 @@ Write "нейми" and command! :3
             await message.answer(f"Я не понял команды, {first_name}! Попробуй 'нейми помощь' :3")
         else:
             await message.answer(f"I didn't understand the command, {first_name}! Try 'нейми help' :3")
-
-# Выбор языка для группы
-@dp.callback_query(F.data.startswith("group_lang_"))
-async def set_group_language_handler(callback: types.CallbackQuery):
-    data = callback.data.split("_")
-    lang = data[2]  # ru или en
-    group_id = int(data[3])
-    
-    set_group_language(group_id, lang)
-    
-    if lang == 'ru':
-        text = "✅ Отлично! Теперь я буду общаться на русском языке в этой группе! :3"
-    else:
-        text = "✅ Great! Now I will communicate in English in this group! :3"
-    
-    try:
-        await callback.message.edit_text(text)
-    except:
-        await callback.message.answer(text)
-    
-    await callback.answer()
 
 # Обработка кнопок профиля в группе
 @dp.callback_query(F.data.startswith("personal_profile_"))
@@ -881,12 +936,18 @@ You're doing great in the group! :3
         await callback.message.answer(profile_text, parse_mode="Markdown")
         await callback.answer()
     except Exception as e:
-        logging.error(f"Error getting group member: {e}")
+        logger.error(f"Error getting group member: {e}")
         await callback.answer("❌ Ошибка получения информации :3" if lang == 'ru' else "❌ Error getting information :3", show_alert=True)
 
 # Запуск бота
 async def main():
-    logging.basicConfig(level=logging.INFO)
+    logger.info("Запуск бота...")
+    try:
+        me = await bot.get_me()
+        logger.info(f"Бот запущен: @{me.username} (ID: {me.id})")
+    except Exception as e:
+        logger.error(f"Ошибка при запуске бота: {e}")
+    
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
