@@ -154,15 +154,14 @@ def get_funny_response(lang='ru'):
 # Инициализация БД
 init_db()
 
-# Функция для отправки сообщений в группе без создания топиков
-async def safe_group_send(chat_id: int, text: str, reply_markup=None, parse_mode=None, message_thread_id=None):
+# Функция для отправки сообщений в группе
+async def safe_group_send(chat_id: int, text: str, reply_markup=None, parse_mode=None):
     try:
         await bot.send_message(
             chat_id=chat_id,
             text=text,
             reply_markup=reply_markup,
-            parse_mode=parse_mode,
-            message_thread_id=message_thread_id
+            parse_mode=parse_mode
         )
         return True
     except Exception as e:
@@ -185,58 +184,13 @@ async def on_bot_added_to_group(event: ChatMemberUpdated):
             
             if not bot_member.can_send_messages:
                 # У бота нет прав на отправку сообщений
-                success = await safe_group_send(
-                    group_id,
-                    "БЛИННН 😫 Я не могу писать в эту группу, потому что у меня нет прав администратора!\n\n"
-                    "Пожалуйста, дайте мне права на отправку сообщений, чтобы я мог работать :3"
-                )
-                
-                # Если не получилось отправить (нет прав), ничего не делаем
-                if not success:
-                    pass
-            else:
-                # Бот может писать, предлагаем выбрать язык группы
-                keyboard = InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [
-                            InlineKeyboardButton(text="🇷🇺 Русский", callback_data=f"group_lang_ru_{group_id}"),
-                            InlineKeyboardButton(text="🇬🇧 English", callback_data=f"group_lang_en_{group_id}")
-                        ]
-                    ]
-                )
-                
                 await safe_group_send(
                     group_id,
-                    f"👋 Приветствую в группе '{group_title}'!\n\n"
-                    f"Выберите язык для общения со мной:\n\n"
-                    f"👋 Welcome to group '{group_title}'!\n"
-                    f"Choose language for communication with me:",
-                    reply_markup=keyboard
+                    "😫 БЛИННН! Я не могу писать в эту группу, потому что у меня нет прав администратора!\n\n"
+                    "Пожалуйста, дайте мне права на отправку сообщений, а затем напишите 'нейми теперь администратор' :3"
                 )
-                
         except Exception as e:
             logging.error(f"Error checking bot permissions: {e}")
-
-# Выбор языка для группы
-@dp.callback_query(F.data.startswith("group_lang_"))
-async def set_group_language_handler(callback: types.CallbackQuery):
-    data = callback.data.split("_")
-    lang = data[2]  # ru или en
-    group_id = int(data[3])
-    
-    set_group_language(group_id, lang)
-    
-    if lang == 'ru':
-        text = "✅ Отлично! Я буду общаться на русском языке в этой группе! :3"
-    else:
-        text = "✅ Great! I will communicate in English in this group! :3"
-    
-    try:
-        await callback.message.edit_text(text)
-    except:
-        await safe_group_send(group_id, text)
-    
-    await callback.answer()
 
 # Обработчик старта в ЛС
 @dp.message(Command("start", "help"))
@@ -247,51 +201,59 @@ async def cmd_start(message: types.Message, state: FSMContext):
     last_name = message.from_user.last_name
     
     if message.chat.type == "private":
-        # Приветственное сообщение с выбором языка
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(text="🇷🇺 Русский", callback_data="start_lang_ru"),
-                    InlineKeyboardButton(text="🇬🇧 English", callback_data="start_lang_en")
-                ]
-            ]
-        )
-        
-        await message.answer(
-            "👋 Привет! Добро пожаловать!\n"
-            "Пожалуйста, выберите язык:\n\n"
-            "👋 Hello! Welcome!\n"
-            "Please choose language:",
-            reply_markup=keyboard
-        )
-        
-        await state.set_state(UserStates.choosing_language)
-    else:
-        # В группе проверяем верификацию, но только если сообщение начинается с команды
-        if message.text and message.text.startswith('/'):
+        # Проверяем, верифицирован ли пользователь
+        if is_user_verified(user_id):
             user = get_user(user_id)
-            if not user or not is_user_verified(user_id):
-                await safe_group_send(
-                    message.chat.id,
-                    f"👤 {first_name}, для использования бота сначала пройди верификацию в личных сообщениях! :3",
-                    message_thread_id=message.message_thread_id
+            lang = user[5] if user else 'ru'
+            
+            if lang == 'ru':
+                keyboard = ReplyKeyboardMarkup(
+                    keyboard=[
+                        [KeyboardButton(text="👤 Мой профиль")],
+                        [KeyboardButton(text="🎲 Случайный бред")],
+                        [KeyboardButton(text="🌍 Сменить язык")]
+                    ],
+                    resize_keyboard=True
                 )
+                await message.answer(
+                    f"С возвращением, {first_name}! :3\n"
+                    f"Используй кнопки ниже:",
+                    reply_markup=keyboard
+                )
+                await state.set_state(UserStates.main_menu)
             else:
-                lang = user[5] if user else 'ru'
-                group_lang = get_group_language(message.chat.id)
-                
-                if group_lang == 'ru' or (group_lang is None and lang == 'ru'):
-                    await safe_group_send(
-                        message.chat.id,
-                        f"Привет, {first_name}! Я уже знаю твой язык. Используй 'нейми' для команд :3",
-                        message_thread_id=message.message_thread_id
-                    )
-                else:
-                    await safe_group_send(
-                        message.chat.id,
-                        f"Hello, {first_name}! I already know your language. Use 'нейми' for commands :3",
-                        message_thread_id=message.message_thread_id
-                    )
+                keyboard = ReplyKeyboardMarkup(
+                    keyboard=[
+                        [KeyboardButton(text="👤 My profile")],
+                        [KeyboardButton(text="🎲 Random nonsense")],
+                        [KeyboardButton(text="🌍 Change language")]
+                    ],
+                    resize_keyboard=True
+                )
+                await message.answer(
+                    f"Welcome back, {first_name}! :3\n"
+                    f"Use buttons below:",
+                    reply_markup=keyboard
+                )
+                await state.set_state(UserStates.main_menu)
+        else:
+            # Приветственное сообщение с выбором языка
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(text="🇷🇺 Русский", callback_data="start_lang_ru"),
+                        InlineKeyboardButton(text="🇬🇧 English", callback_data="start_lang_en")
+                    ]
+                ]
+            )
+            
+            await message.answer(
+                "👋 Привет! Добро пожаловать!\n"
+                "Пожалуйста, выберите язык:\n\n"
+                "👋 Hello! Welcome!\n"
+                "Please choose language:",
+                reply_markup=keyboard
+            )
 
 # Выбор языка при старте
 @dp.callback_query(F.data.startswith("start_lang_"))
@@ -326,7 +288,7 @@ async def start_language_handler(callback: types.CallbackQuery, state: FSMContex
             f"├ Юзернейм: @{username if username else 'нет'}\n"
             f"├ Язык: 🇷🇺 Русский\n"
             f"└ Статус: ✅ Верифицирован\n\n"
-            f"Используй кнопки ниже или команды в группах! :3",
+            f"Используй кнопки ниже! :3",
             parse_mode="Markdown",
             reply_markup=keyboard
         )
@@ -350,7 +312,7 @@ async def start_language_handler(callback: types.CallbackQuery, state: FSMContex
             f"├ Username: @{username if username else 'none'}\n"
             f"├ Language: 🇬🇧 English\n"
             f"└ Status: ✅ Verified\n\n"
-            f"Use buttons below or commands in groups! :3",
+            f"Use buttons below! :3",
             parse_mode="Markdown",
             reply_markup=keyboard
         )
@@ -359,15 +321,21 @@ async def start_language_handler(callback: types.CallbackQuery, state: FSMContex
     await callback.answer()
 
 # Обработка ЛС - главное меню
-@dp.message(UserStates.main_menu)
-async def handle_main_menu(message: types.Message, state: FSMContext):
+@dp.message(F.chat.type == "private")
+async def handle_private_messages(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
+    
+    # Проверяем верификацию
+    if not is_user_verified(user_id):
+        await message.answer("Сначала пройди верификацию! Напиши /start :3")
+        return
+    
     user = get_user(user_id)
     lang = user[5] if user else 'ru'
     
+    # Обработка текстовых команд
     if lang == 'ru':
         if message.text == "👤 Мой профиль":
-            # Полная информация о профиле
             user_info = f"""
 📋 *Твой профиль:*
 
@@ -402,11 +370,21 @@ async def handle_main_menu(message: types.Message, state: FSMContext):
             )
             await message.answer("Выбери новый язык:", reply_markup=keyboard)
         
+        elif message.text == "/start" or message.text == "/help":
+            await cmd_start(message, state)
+        
         else:
-            await message.answer("Используй кнопки ниже! :3")
+            keyboard = ReplyKeyboardMarkup(
+                keyboard=[
+                    [KeyboardButton(text="👤 Мой профиль")],
+                    [KeyboardButton(text="🎲 Случайный бред")],
+                    [KeyboardButton(text="🌍 Сменить язык")]
+                ],
+                resize_keyboard=True
+            )
+            await message.answer("Используй кнопки ниже! :3", reply_markup=keyboard)
     
     else:
-        # English version
         if message.text == "👤 My profile":
             user_info = f"""
 📋 *Your profile:*
@@ -442,8 +420,19 @@ You're an awesome user! Keep it up! :3
             )
             await message.answer("Choose a new language:", reply_markup=keyboard)
         
+        elif message.text == "/start" or message.text == "/help":
+            await cmd_start(message, state)
+        
         else:
-            await message.answer("Use the buttons below! :3")
+            keyboard = ReplyKeyboardMarkup(
+                keyboard=[
+                    [KeyboardButton(text="👤 My profile")],
+                    [KeyboardButton(text="🎲 Random nonsense")],
+                    [KeyboardButton(text="🌍 Change language")]
+                ],
+                resize_keyboard=True
+            )
+            await message.answer("Use buttons below! :3", reply_markup=keyboard)
 
 # Смена языка в ЛС
 @dp.callback_query(F.data.startswith("change_lang_"))
@@ -487,99 +476,112 @@ async def change_language_handler(callback: types.CallbackQuery, state: FSMConte
             reply_markup=keyboard
         )
     
+    await state.set_state(UserStates.main_menu)
     await callback.answer()
 
-# Обработка сообщений в группах - ТОЛЬКО КОМАНДЫ С "НЕЙМИ"
+# Обработка сообщений в группах
 @dp.message(F.chat.type.in_(["group", "supergroup"]))
 async def handle_group_messages(message: types.Message):
-    # Проверяем, начинается ли сообщение с "нейми"
     text = message.text or ""
-    
-    if not text.lower().startswith("нейми") and not text.lower().startswith("neymi"):
-        return  # Игнорируем сообщения без "нейми"
-    
     user_id = message.from_user.id
     first_name = message.from_user.first_name
     
-    # Проверяем, может ли бот писать
+    # Проверяем, начинается ли с "нейми"
+    if text.lower().startswith("нейми"):
+        command = text[6:].strip().lower()
+    elif text.lower().startswith("neymi"):
+        command = text[6:].strip().lower()
+    else:
+        return  # Игнорируем сообщения без "нейми"
+    
+    # Проверяем права бота
     try:
         bot_member = await bot.get_chat_member(message.chat.id, bot.id)
-        if not bot_member.can_send_messages:
-            # Бот не может писать, ничего не делаем
-            return
-    except Exception as e:
-        logging.error(f"Error checking bot permissions: {e}")
+        can_send = bot_member.can_send_messages
+    except:
+        can_send = False
+    
+    # Если нет команды после "нейми" - отвечаем "Я тута :3"
+    if not command:
+        if can_send:
+            await safe_group_send(message.chat.id, "Я тута :3")
+        return
+    
+    # Команда "теперь администратор"
+    if "теперь администратор" in command or "now admin" in command:
+        if can_send:
+            # Проверяем язык группы
+            group_lang = get_group_language(message.chat.id)
+            if group_lang is None:
+                # Предлагаем выбрать язык
+                keyboard = InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(text="🇷🇺 Русский", callback_data=f"group_lang_ru_{message.chat.id}"),
+                            InlineKeyboardButton(text="🇬🇧 English", callback_data=f"group_lang_en_{message.chat.id}")
+                        ]
+                    ]
+                )
+                await safe_group_send(
+                    message.chat.id,
+                    "✅ Теперь у меня есть права администратора! Выберите язык для общения:\n\n"
+                    "✅ Now I have administrator rights! Choose language for communication:",
+                    reply_markup=keyboard
+                )
+            else:
+                lang_text = "на русском" if group_lang == 'ru' else "in English"
+                await safe_group_send(
+                    message.chat.id,
+                    f"✅ У меня уже есть права администратора! Я уже общаюсь {lang_text} :3"
+                )
+        else:
+            # Бот все еще не может писать
+            try:
+                await safe_group_send(
+                    message.chat.id,
+                    "😫 Все еще не могу писать! Проверьте, дали ли мне права администратора :3"
+                )
+            except:
+                pass
+        return
+    
+    # Проверяем, может ли бот писать
+    if not can_send:
         return
     
     # Получаем язык группы
     group_lang = get_group_language(message.chat.id)
     if group_lang is None:
-        # Если язык группы не установлен, предлагаем выбрать
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(text="🇷🇺 Русский", callback_data=f"group_lang_ru_{message.chat.id}"),
-                    InlineKeyboardButton(text="🇬🇧 English", callback_data=f"group_lang_en_{message.chat.id}")
-                ]
-            ]
+        # Язык группы не установлен
+        await safe_group_send(
+            message.chat.id,
+            "🌍 Сначала выберите язык для бота! Напишите 'нейми теперь администратор' :3"
         )
-        
-        try:
-            await safe_group_send(
-                message.chat.id,
-                "🌍 Пожалуйста, выберите язык для бота в этой группе:\n\n"
-                "🌍 Please choose language for bot in this group:",
-                reply_markup=keyboard,
-                message_thread_id=message.message_thread_id
-            )
-        except:
-            pass
         return
     
     # Проверяем верификацию пользователя
     if not is_user_verified(user_id):
-        try:
-            await safe_group_send(
-                message.chat.id,
-                f"👤 {first_name}, для использования бота сначала пройди верификацию в личных сообщениях! :3",
-                message_thread_id=message.message_thread_id
-            )
-        except:
-            pass
+        await safe_group_send(
+            message.chat.id,
+            f"👤 {first_name}, для использования бота сначала пройди верификацию в личных сообщениях! Напиши /start :3"
+        )
         return
     
     # Получаем язык пользователя
     user = get_user(user_id)
     user_lang = user[5] if user else group_lang
-    
-    # Определяем язык ответа (приоритет: язык группы > язык пользователя)
     response_lang = group_lang if group_lang else user_lang
-    
-    # Извлекаем команду
-    command = text[6:].strip().lower()
     
     # Приветствие
     if any(word in command for word in ["привет", "hello", "hi", "хай"]):
         if response_lang == 'ru':
-            await safe_group_send(
-                message.chat.id,
-                f"Привет, {first_name}! Как дела? :3",
-                message_thread_id=message.message_thread_id
-            )
+            await safe_group_send(message.chat.id, f"Привет, {first_name}! Как дела? :3")
         else:
-            await safe_group_send(
-                message.chat.id,
-                f"Hello, {first_name}! How are you? :3",
-                message_thread_id=message.message_thread_id
-            )
+            await safe_group_send(message.chat.id, f"Hello, {first_name}! How are you? :3")
     
     # Бред
     elif "бред" in command or "nonsense" in command:
-        await safe_group_send(
-            message.chat.id,
-            get_funny_response(response_lang),
-            message_thread_id=message.message_thread_id
-        )
+        await safe_group_send(message.chat.id, get_funny_response(response_lang))
     
     # Кому дать тортик
     elif "кому дать тортик" in command or "give cake" in command:
@@ -590,29 +592,19 @@ async def handle_group_messages(message: types.Message):
                 await safe_group_send(
                     message.chat.id,
                     f"ХА! Конечно же {user_link} нужно дать тортик! 🎂 :3",
-                    parse_mode="Markdown",
-                    message_thread_id=message.message_thread_id
+                    parse_mode="Markdown"
                 )
             else:
                 await safe_group_send(
                     message.chat.id,
                     f"HA! Of course {user_link} needs to get cake! 🎂 :3",
-                    parse_mode="Markdown",
-                    message_thread_id=message.message_thread_id
+                    parse_mode="Markdown"
                 )
         else:
             if response_lang == 'ru':
-                await safe_group_send(
-                    message.chat.id,
-                    "Ответь на сообщение человека, которому хочешь дать тортик! :3",
-                    message_thread_id=message.message_thread_id
-                )
+                await safe_group_send(message.chat.id, "Ответь на сообщение человека, которому хочешь дать тортик! :3")
             else:
-                await safe_group_send(
-                    message.chat.id,
-                    "Reply to the person's message who you want to give cake to! :3",
-                    message_thread_id=message.message_thread_id
-                )
+                await safe_group_send(message.chat.id, "Reply to the person's message who you want to give cake to! :3")
     
     # Приватная команда для создателя
     elif "кто моя жена" in command or "who is my wife" in command:
@@ -620,22 +612,13 @@ async def handle_group_messages(message: types.Message):
             await safe_group_send(
                 message.chat.id,
                 "ХА! Конечно же [@eshhka_8](https://t.me/eshhka_8) твоя жена! 💖 :3",
-                parse_mode="Markdown",
-                message_thread_id=message.message_thread_id
+                parse_mode="Markdown"
             )
         else:
             if response_lang == 'ru':
-                await safe_group_send(
-                    message.chat.id,
-                    "Эта команда только для создателя! :3",
-                    message_thread_id=message.message_thread_id
-                )
+                await safe_group_send(message.chat.id, "Эта команда только для создателя! :3")
             else:
-                await safe_group_send(
-                    message.chat.id,
-                    "This command is only for the creator! :3",
-                    message_thread_id=message.message_thread_id
-                )
+                await safe_group_send(message.chat.id, "This command is only for the creator! :3")
     
     # Профиль
     elif "профиль" in command or "profile" in command:
@@ -658,15 +641,13 @@ async def handle_group_messages(message: types.Message):
             await safe_group_send(
                 message.chat.id,
                 f"📊 {first_name}, какой профиль показать? :3",
-                reply_markup=keyboard,
-                message_thread_id=message.message_thread_id
+                reply_markup=keyboard
             )
         else:
             await safe_group_send(
                 message.chat.id,
                 f"📊 {first_name}, which profile to show? :3",
-                reply_markup=keyboard,
-                message_thread_id=message.message_thread_id
+                reply_markup=keyboard
             )
     
     # Помощь
@@ -676,12 +657,12 @@ async def handle_group_messages(message: types.Message):
 🤖 *Доступные команды для {first_name}:*
 
 Начинай с "нейми":
-• *привет* - поздороваться
-• *бред* - получить случайный бред
-• *кому дать тортик* - дать тортик (ответь на сообщение)
-• *профиль* - показать профиль
-• *как дела* - узнать как у бота дела
-• *факт* - случайный факт
+• привет - поздороваться
+• бред - получить случайный бред
+• кому дать тортик - дать тортик (ответь на сообщение)
+• профиль - показать профиль
+• как дела - узнать как у бота дела
+• факт - случайный факт
 
 Пиши "нейми" и команду! :3
             """
@@ -690,22 +671,17 @@ async def handle_group_messages(message: types.Message):
 🤖 *Available commands for {first_name}:*
 
 Start with "нейми":
-• *hello* - say hello
-• *nonsense* - get random nonsense
-• *give cake* - give cake (reply to message)
-• *profile* - show profile
-• *how are you* - ask how the bot is doing
-• *fact* - random fact
+• hello - say hello
+• nonsense - get random nonsense
+• give cake - give cake (reply to message)
+• profile - show profile
+• how are you - ask how the bot is doing
+• fact - random fact
 
 Write "нейми" and command! :3
             """
         
-        await safe_group_send(
-            message.chat.id,
-            help_text,
-            parse_mode="Markdown",
-            message_thread_id=message.message_thread_id
-        )
+        await safe_group_send(message.chat.id, help_text, parse_mode="Markdown")
     
     # Как дела
     elif "как дела" in command or "how are you" in command:
@@ -721,11 +697,7 @@ Write "нейми" and command! :3
                 f"Awesome! Saw a squirrel riding a skateboard! 🐿️🛹 :3",
                 f"Couldn't be better! Just got a virtual cookie! 🍪 :3"
             ]
-        await safe_group_send(
-            message.chat.id,
-            random.choice(responses),
-            message_thread_id=message.message_thread_id
-        )
+        await safe_group_send(message.chat.id, random.choice(responses))
     
     # Факт
     elif "факт" in command or "fact" in command:
@@ -743,33 +715,41 @@ Write "нейми" and command! :3
                 "Honey never spoils! 🍯 :3",
                 "A shrimp's heart is in its head! 🦐 :3"
             ]
-        await safe_group_send(
-            message.chat.id,
-            random.choice(facts),
-            message_thread_id=message.message_thread_id
-        )
+        await safe_group_send(message.chat.id, random.choice(facts))
     
     # Неизвестная команда
     else:
         if response_lang == 'ru':
-            await safe_group_send(
-                message.chat.id,
-                f"Я не понял команды, {first_name}! Попробуй 'нейми помощь' :3",
-                message_thread_id=message.message_thread_id
-            )
+            await safe_group_send(message.chat.id, f"Я не понял команды, {first_name}! Попробуй 'нейми помощь' :3")
         else:
-            await safe_group_send(
-                message.chat.id,
-                f"I didn't understand the command, {first_name}! Try 'нейми help' :3",
-                message_thread_id=message.message_thread_id
-            )
+            await safe_group_send(message.chat.id, f"I didn't understand the command, {first_name}! Try 'нейми help' :3")
+
+# Выбор языка для группы
+@dp.callback_query(F.data.startswith("group_lang_"))
+async def set_group_language_handler(callback: types.CallbackQuery):
+    data = callback.data.split("_")
+    lang = data[2]  # ru или en
+    group_id = int(data[3])
+    
+    set_group_language(group_id, lang)
+    
+    if lang == 'ru':
+        text = "✅ Отлично! Теперь я буду общаться на русском языке в этой группе! :3"
+    else:
+        text = "✅ Great! Now I will communicate in English in this group! :3"
+    
+    try:
+        await callback.message.edit_text(text)
+    except:
+        await safe_group_send(group_id, text)
+    
+    await callback.answer()
 
 # Обработка кнопок профиля в группе
 @dp.callback_query(F.data.startswith("personal_profile_"))
 async def show_personal_profile(callback: types.CallbackQuery):
     user_id = int(callback.data.split("_")[2])
     
-    # Проверяем, что запрашивает свой профиль
     if callback.from_user.id != user_id:
         await callback.answer("Это не твой профиль! :3", show_alert=True)
         return
@@ -818,7 +798,6 @@ async def show_group_profile(callback: types.CallbackQuery):
     user_id = int(data[2])
     group_id = int(data[3])
     
-    # Проверяем, что запрашивает свой профиль
     if callback.from_user.id != user_id:
         await callback.answer("Это не твой профиль! :3", show_alert=True)
         return
@@ -827,7 +806,6 @@ async def show_group_profile(callback: types.CallbackQuery):
     lang = user[5] if user else 'ru'
     
     try:
-        # Получаем информацию о пользователе в группе
         member = await bot.get_chat_member(group_id, user_id)
         role = "👑 Создатель" if member.status == "creator" else "⚡ Админ" if member.status == "administrator" else "👤 Участник"
         
@@ -858,12 +836,7 @@ async def show_group_profile(callback: types.CallbackQuery):
 You're doing great in the group! :3
             """
         
-        await safe_group_send(
-            callback.message.chat.id,
-            profile_text,
-            parse_mode="Markdown",
-            message_thread_id=callback.message.message_thread_id
-        )
+        await safe_group_send(callback.message.chat.id, profile_text, parse_mode="Markdown")
         await callback.answer()
     except Exception as e:
         logging.error(f"Error getting group member: {e}")
