@@ -1,6 +1,7 @@
 import logging
 import random
 import sqlite3
+import os
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -9,16 +10,15 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
-# Настройки
+# Твои данные
 API_TOKEN = '8506993378:AAEFg37n8nV1rhQGJXXPAQUeKrbUe6t5QJ8'
+CREATOR_USERNAME = 'whitestrings'
+CREATOR_ID = '8019499675'
+
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Ваш юзернейм для приватных команд
-CREATOR_USERNAME = 'whitestrings'
-CREATOR_ID = '8019499675'  # Узнать через @userinfobot
-
-# База данных SQLite
+# База данных
 def init_db():
     conn = sqlite3.connect('bot_users.db')
     cursor = conn.cursor()
@@ -49,12 +49,10 @@ def update_user(user_id, username, first_name, last_name, language='ru'):
     conn = sqlite3.connect('bot_users.db')
     cursor = conn.cursor()
     
-    # Проверяем существует ли пользователь
     cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
     user = cursor.fetchone()
     
     if user:
-        # Обновляем данные
         cursor.execute('''
             UPDATE users SET 
             username = ?, first_name = ?, last_name = ?, 
@@ -62,7 +60,6 @@ def update_user(user_id, username, first_name, last_name, language='ru'):
             WHERE user_id = ?
         ''', (username, first_name, last_name, language, datetime.now(), user_id))
     else:
-        # Создаем нового пользователя
         cursor.execute('''
             INSERT INTO users 
             (user_id, username, first_name, last_name, language, verified, registered_date, last_seen) 
@@ -96,33 +93,36 @@ class UserStates(StatesGroup):
 def get_funny_response(lang='ru'):
     if lang == 'ru':
         responses = [
-            "Я видел как бегемот учил котенка танцевать танго! 🦛🐱",
-            "Вчера видел облако в форме пиццы с ананасами! 🍕☁️",
-            "Моя бабушка играет в доту лучше тебя! 👵🎮",
-            "Если посолить арбуз, он станет селедкой! 🍉➡️🐟",
-            "Кошки управляют миром, но мы об этом не знаем! 🐈👑",
-            "Зебра - это лошадь в пижаме! 🦓",
-            "Улитки спят по 3 года! 🐌😴",
-            "Мед никогда не портится - у него нет сроков годности! 🍯",
-            "Сердце креветки находится в ее голове! 🦐",
-            "Осьминоги имеют три сердца! 🐙"
+            "Я видел как бегемот учил котенка танцевать танго! 🦛🐱 :3",
+            "Вчера видел облако в форме пиццы с ананасами! 🍕☁️ :3",
+            "Моя бабушка играет в доту лучше тебя! 👵🎮 :3",
+            "Если посолить арбуз, он станет селедкой! 🍉➡️🐟 :3",
+            "Кошки управляют миром, но мы об этом не знаем! 🐈👑 :3",
+            "Зебра - это лошадь в пижаме! 🦓 :3",
+            "Улитки спят по 3 года! 🐌😴 :3",
+            "Мед никогда не портится - у него нет сроков годности! 🍯 :3",
+            "Сердце креветки находится в ее голове! 🦐 :3",
+            "Осьминоги имеют три сердца! 🐙 :3"
         ]
     else:
         responses = [
-            "I saw a hippo teaching a kitten to dance tango! 🦛🐱",
-            "Yesterday I saw a cloud shaped like pineapple pizza! 🍕☁️",
-            "My grandma plays Dota better than you! 👵🎮",
-            "If you salt a watermelon, it becomes a herring! 🍉➡️🐟",
-            "Cats rule the world, but we don't know it! 🐈👑",
-            "A zebra is a horse in pajamas! 🦓",
-            "Snails can sleep for 3 years! 🐌😴",
-            "Honey never spoils - it has no expiration date! 🍯",
-            "A shrimp's heart is in its head! 🦐",
-            "Octopuses have three hearts! 🐙"
+            "I saw a hippo teaching a kitten to dance tango! 🦛🐱 :3",
+            "Yesterday I saw a cloud shaped like pineapple pizza! 🍕☁️ :3",
+            "My grandma plays Dota better than you! 👵🎮 :3",
+            "If you salt a watermelon, it becomes a herring! 🍉➡️🐟 :3",
+            "Cats rule the world, but we don't know it! 🐈👑 :3",
+            "A zebra is a horse in pajamas! 🦓 :3",
+            "Snails can sleep for 3 years! 🐌😴 :3",
+            "Honey never spoils - it has no expiration date! 🍯 :3",
+            "A shrimp's heart is in its head! 🦐 :3",
+            "Octopuses have three hearts! 🐙 :3"
         ]
-    return random.choice(responses) + " :3"
+    return random.choice(responses)
 
-# Обработчик добавления в группу
+# Инициализация БД
+init_db()
+
+# Обработчик старта
 @dp.message(Command("start", "help"))
 async def cmd_start(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
@@ -131,13 +131,11 @@ async def cmd_start(message: types.Message, state: FSMContext):
     last_name = message.from_user.last_name
     
     if message.chat.type == "private":
-        # Сохраняем пользователя в БД
         update_user(user_id, username, first_name, last_name)
         
-        # Проверяем, верифицирован ли пользователь
         if is_user_verified(user_id):
             user = get_user(user_id)
-            lang = user[5] if user else 'ru'  # language находится в 5-й колонке
+            lang = user[5] if user else 'ru'
             
             if lang == 'ru':
                 keyboard = ReplyKeyboardMarkup(
@@ -165,7 +163,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
             await message.answer(text, reply_markup=keyboard)
             await state.set_state(UserStates.choosing_action)
         else:
-            # Просим выбрать язык
             keyboard = InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
@@ -182,10 +179,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
                 reply_markup=keyboard
             )
     else:
-        # В группе проверяем верификацию
         user = get_user(user_id)
         if not user or not is_user_verified(user_id):
-            # Отправляем приватное сообщение с инструкцией
             try:
                 await bot.send_message(
                     user_id,
@@ -195,7 +190,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
             except:
                 pass
             
-            # В группе показываем сообщение
             await message.answer(
                 f"👤 {first_name}, сначала пройди верификацию в личных сообщениях с ботом! :3"
             )
@@ -209,14 +203,13 @@ async def cmd_start(message: types.Message, state: FSMContext):
 # Обработчик выбора языка
 @dp.callback_query(F.data.startswith("lang_"))
 async def set_language(callback: types.CallbackQuery, state: FSMContext):
-    lang = callback.data.split("_")[1]  # lang_ru или lang_en
+    lang = callback.data.split("_")[1]
     
     user_id = callback.from_user.id
     username = callback.from_user.username
     first_name = callback.from_user.first_name
     last_name = callback.from_user.last_name
     
-    # Сохраняем язык пользователя
     update_user(user_id, username, first_name, last_name, lang)
     set_user_language(user_id, lang)
     
@@ -251,33 +244,27 @@ async def set_language(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(UserStates.choosing_action)
     await callback.answer()
 
-# Обработка сообщений в группах (только для верифицированных пользователей)
+# Обработка сообщений в группах
 @dp.message(F.chat.type.in_(["group", "supergroup"]))
 async def handle_group_messages(message: types.Message):
     user_id = message.from_user.id
     first_name = message.from_user.first_name
     
-    # Проверяем верификацию пользователя
     if not is_user_verified(user_id):
-        # Пропускаем обработку для неверифицированных пользователей
         return
     
-    # Получаем язык пользователя
     user = get_user(user_id)
     if not user:
         return
     
-    lang = user[5]  # language
+    lang = user[5]
     
     text = message.text.lower() if message.text else ""
     
-    # Проверяем, начинается ли с "нейми"
     if text.startswith("нейми") or text.startswith("neymi"):
         command = text[6:].strip() if text.startswith("нейми") else text[6:].strip()
         
-        # Определяем язык ответа на основе языка пользователя
         if lang == 'ru':
-            # Русские ответы
             if any(word in command for word in ["привет", "хай", "здаров"]):
                 await message.answer(f"Привет, {first_name}! Как дела? :3")
             
@@ -289,15 +276,13 @@ async def handle_group_messages(message: types.Message):
                     user = message.reply_to_message.from_user
                     username = f"@{user.username}" if user.username else user.first_name
                     user_link = f"https://t.me/{user.username}" if user.username else f"[{user.first_name}](tg://user?id={user.id})"
-                    await message.answer(f"ХА! Конечно же {user_link} нужно дать тортик! 🎂 :3", 
-                                       parse_mode="Markdown")
+                    await message.answer(f"ХА! Конечно же {user_link} нужно дать тортик! 🎂 :3", parse_mode="Markdown")
                 else:
                     await message.answer("Ответь на сообщение человека, которому хочешь дать тортик! :3")
             
             elif "кто моя жена" in command:
                 if str(message.from_user.id) == CREATOR_ID or message.from_user.username == CREATOR_USERNAME:
-                    await message.answer("ХА! Конечно же [@eshhka_8](https://t.me/eshhka_8) твоя жена! 💖 :3", 
-                                       parse_mode="Markdown")
+                    await message.answer("ХА! Конечно же [@eshhka_8](https://t.me/eshhka_8) твоя жена! 💖 :3", parse_mode="Markdown")
                 else:
                     await message.answer("Эта команда только для создателя! :3")
             
@@ -347,7 +332,6 @@ async def handle_group_messages(message: types.Message):
                 await message.answer(f"Я не понял команды, {first_name}! Попробуй 'нейми помощь' :3")
         
         else:
-            # Английские ответы
             if any(word in command for word in ["hello", "hi", "hey"]):
                 await message.answer(f"Hello, {first_name}! How are you? :3")
             
@@ -359,15 +343,13 @@ async def handle_group_messages(message: types.Message):
                     user = message.reply_to_message.from_user
                     username = f"@{user.username}" if user.username else user.first_name
                     user_link = f"https://t.me/{user.username}" if user.username else f"[{user.first_name}](tg://user?id={user.id})"
-                    await message.answer(f"HA! Of course {user_link} needs to get cake! 🎂 :3", 
-                                       parse_mode="Markdown")
+                    await message.answer(f"HA! Of course {user_link} needs to get cake! 🎂 :3", parse_mode="Markdown")
                 else:
                     await message.answer("Reply to the person's message who you want to give cake to! :3")
             
             elif "who is my wife" in command:
                 if str(message.from_user.id) == CREATOR_ID or message.from_user.username == CREATOR_USERNAME:
-                    await message.answer("HA! Of course [@eshhka_8](https://t.me/eshhka_8) is your wife! 💖 :3", 
-                                       parse_mode="Markdown")
+                    await message.answer("HA! Of course [@eshhka_8](https://t.me/eshhka_8) is your wife! 💖 :3", parse_mode="Markdown")
                 else:
                     await message.answer("This command is only for the creator! :3")
             
@@ -416,7 +398,7 @@ All commands end with :3
             else:
                 await message.answer(f"I didn't understand the command, {first_name}! Try 'нейми help' :3")
 
-# Обработка ЛС - действия после верификации
+# Обработка ЛС
 @dp.message(UserStates.choosing_action)
 async def handle_action(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
@@ -475,7 +457,6 @@ async def handle_action(message: types.Message, state: FSMContext):
             await message.answer(help_text, parse_mode="Markdown")
     
     else:
-        # English responses
         if message.text == "My profile":
             user_info = f"""
 📋 *Your profile:*
@@ -526,10 +507,10 @@ All commands end with :3
             """
             await message.answer(help_text, parse_mode="Markdown")
 
-# Обработчик смены языка
+# Смена языка
 @dp.callback_query(F.data.startswith("changelang_"))
 async def change_language(callback: types.CallbackQuery):
-    lang = callback.data.split("_")[1]  # changelang_ru или changelang_en
+    lang = callback.data.split("_")[1]
     
     user_id = callback.from_user.id
     set_user_language(user_id, lang)
@@ -566,7 +547,7 @@ async def change_language(callback: types.CallbackQuery):
 
 # Запуск бота
 async def main():
-    init_db()
+    logging.basicConfig(level=logging.INFO)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
